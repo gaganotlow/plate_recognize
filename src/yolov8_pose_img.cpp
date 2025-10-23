@@ -170,9 +170,11 @@ int main(int argc, char **argv)
     std::vector<Detection> objects;
     std::vector<std::map<int, KeyPoint>> kps;
     
+    NN_LOG_INFO("Input image size: %dx%d", img.cols, img.rows);
     auto start_pose = std::chrono::high_resolution_clock::now();
     ret_pose = yolo.Run(img, objects, kps);
     auto end_pose = std::chrono::high_resolution_clock::now();
+    NN_LOG_INFO("After Run, img size: %dx%d", img.cols, img.rows);
     
     if (ret_pose != NN_SUCCESS) {
         NN_LOG_ERROR("Pose detection failed");
@@ -194,7 +196,7 @@ int main(int argc, char **argv)
             
             // 从原始图像（无绘制痕迹）提取车牌区域
             // 左右扩展10%，上下扩展3%
-            cv::Mat plate_roi = extract_plate_from_keypoints(img, keypoint_map, 0.1, 0.1);
+            cv::Mat plate_roi = extract_plate_from_keypoints(img, keypoint_map, 0.1, 0.2);
             
             if (plate_roi.empty()) {
                 NN_LOG_WARNING("Failed to extract plate ROI for object %zu", i);

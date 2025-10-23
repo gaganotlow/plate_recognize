@@ -13,36 +13,29 @@ static int g_max_num_output = 20;
 static std::vector<std::string> g_classes = {
     "plate"};
 
-// 偏移解码
-void letterbox_decode(std::vector<Detection> &objects, bool hor, int pad)
+// 检测框坐标还原：从letterbox坐标系还原到原图坐标系
+void letterbox_decode(std::vector<Detection> &objects, const LetterBoxInfo &info)
 {
     for (auto &obj : objects)
     {
-        if (hor)
-        {
-            obj.box.x -= pad;
-        }
-        else
-        {
-            obj.box.y -= pad;
-        }
+        // 使用精确的scale_x和scale_y分别还原x和y坐标（修复对齐导致的偏差）
+        obj.box.x = (obj.box.x - info.x_pad) / info.scale_x;
+        obj.box.y = (obj.box.y - info.y_pad) / info.scale_y;
+        obj.box.width = obj.box.width / info.scale_x;
+        obj.box.height = obj.box.height / info.scale_y;
     }
 }
-// 偏移解码
-void letterbox_pose_decode(std::vector<std::map<int, KeyPoint>> &keypoints, bool hor, int pad)
+
+// 关键点坐标还原：从letterbox坐标系还原到原图坐标系
+void letterbox_pose_decode(std::vector<std::map<int, KeyPoint>> &keypoints, const LetterBoxInfo &info)
 {
     for (auto &keypoint : keypoints)
     {
         for (auto &keypoint_item : keypoint)
         {
-            if (hor)
-            {
-                keypoint_item.second.x -= pad;
-            }
-            else
-            {
-                keypoint_item.second.y -= pad;
-            }
+            // 使用精确的scale_x和scale_y分别还原x和y坐标（修复对齐导致的偏差）
+            keypoint_item.second.x = (keypoint_item.second.x - info.x_pad) / info.scale_x;
+            keypoint_item.second.y = (keypoint_item.second.y - info.y_pad) / info.scale_y;
         }
     }
 }
@@ -133,24 +126,30 @@ nn_error_e Yolov8Custom::LoadModel(const char *model_path)
 // 预处理
 nn_error_e Yolov8Custom::Preprocess(const cv::Mat &img, const std::string process_type, cv::Mat &image_letterbox)
 {
+    // 预处理包含：letterbox、归一化、BGR2RGB、NCHW
+    // 其中RKNN会做：归一化、NCHW转换，所以这里只需要做letterbox、BGR2RGB
+    
+    int model_width = input_tensor_.attr.dims[2];
+    int model_height = input_tensor_.attr.dims[1];
+    float wh_ratio = (float)model_width / (float)model_height;
 
-    // 预处理包含：letterbox、归一化、BGR2RGB、NCWH
-    // 其中RKNN会做：归一化、NCWH转换（详见课程文档），所以这里只需要做letterbox、BGR2RGB
-    // 比例
-    float wh_ratio = (float)input_tensor_.attr.dims[2] / (float)input_tensor_.attr.dims[1];
-
-    // lettorbox
     if (process_type == "opencv")
     {
-        // BGR2RGB，resize，再放入input_tensor_中
+        // OpenCV版本：CPU处理，letterbox+resize
         letterbox_info_ = letterbox(img, image_letterbox, wh_ratio);
-        cvimg2tensor(image_letterbox, input_tensor_.attr.dims[2], input_tensor_.attr.dims[1], input_tensor_);
+        cvimg2tensor(image_letterbox, model_width, model_height, input_tensor_);
     }
     else if (process_type == "rga")
     {
-        // rga resize
-        letterbox_info_ = letterbox_rga(img, image_letterbox, wh_ratio);
-        cvimg2tensor_rga(image_letterbox, input_tensor_.attr.dims[2], input_tensor_.attr.dims[1], input_tensor_);
+        // RGA版本：硬件加速，一步完成 letterbox + resize + BGR2RGB
+        letterbox_info_ = letterbox_rga(img, model_width, model_height, input_tensor_, 114);
+        // 使用tensor.data创建image_letterbox Mat（用于后续处理，如Postprocess）
+        image_letterbox = cv::Mat(model_height, model_width, CV_8UC3, input_tensor_.data);
+    }
+    else
+    {
+        NN_LOG_ERROR("Unknown preprocess type: %s, use 'opencv' or 'rga'", process_type.c_str());
+        return NN_RKNN_INPUT_ATTR_ERROR;
     }
 
     return NN_SUCCESS;
@@ -231,10 +230,17 @@ nn_error_e Yolov8Custom::Run(const cv::Mat &img, std::vector<Detection> &objects
     }
 
     cv::Mat image_letterbox;
-    // 预处理，支持opencv或rga
-    auto ret = Preprocess(img, "opencv", image_letterbox);
+ 
+    // 计时
+    auto start = std::chrono::high_resolution_clock::now();
+    // 预处理：opencv(CPU) 或 rga(硬件加速，推荐)
+    auto ret = Preprocess(img, "rga", image_letterbox);
 
-    // // save image_letterbox
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+    NN_LOG_INFO("yolov8 preprocess time: %ldms", duration);
+
+    // // save image_letterbox for debugging
     // cv::imwrite("letterbox.jpg", image_letterbox);
 
     if (ret != NN_SUCCESS)
@@ -255,10 +261,23 @@ nn_error_e Yolov8Custom::Run(const cv::Mat &img, std::vector<Detection> &objects
         NN_LOG_ERROR("yolov8 postprocess failed");
         return ret;
     }
-    // 偏移
-    letterbox_decode(objects, letterbox_info_.hor, letterbox_info_.pad);
+    
+    // 坐标还原：从letterbox坐标系还原到原图坐标系
+    NN_LOG_INFO("Before decode: scale=%.3f, x_pad=%d, y_pad=%d", 
+                letterbox_info_.scale, letterbox_info_.x_pad, letterbox_info_.y_pad);
+    if (!objects.empty()) {
+        NN_LOG_INFO("Before decode: box[0]=(%d,%d,%d,%d)", 
+                    objects[0].box.x, objects[0].box.y, objects[0].box.width, objects[0].box.height);
+    }
+    
+    letterbox_decode(objects, letterbox_info_);
     if (model_type_ == NN_YOLOV8_POSE)
-        letterbox_pose_decode(keypoints, letterbox_info_.hor, letterbox_info_.pad);
+        letterbox_pose_decode(keypoints, letterbox_info_);
+    
+    if (!objects.empty()) {
+        NN_LOG_INFO("After decode: box[0]=(%d,%d,%d,%d)", 
+                    objects[0].box.x, objects[0].box.y, objects[0].box.width, objects[0].box.height);
+    }
 
     return NN_SUCCESS;
 }
