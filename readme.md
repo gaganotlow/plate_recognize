@@ -18,3 +18,25 @@
     ./yolov8_pose_img ../weights/best_relu.rknn ../weights/PlateRec_CTC.rknn ../media/test.jpg
 
     ```
+<img width="832" height="454" alt="image" src="https://github.com/user-attachments/assets/2320d620-03ed-4c2c-9304-57d553233a54" />
+
+
+```
+推理时间: 37ms
+检测到车牌: 3 个
+车牌 #1:
+推理时间: 3ms
+识别结果: 粤CMM281
+车牌 #2:
+推理时间: 2ms
+识别结果: 川A1P68B
+车牌 #3:
+推理时间: 2ms
+识别结果: 川A36B80
+共识别 3 个车牌
+
+========================================
+推理完成！结果已保存到 result.jpg
+========================================
+```
+
