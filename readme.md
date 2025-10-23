@@ -8,7 +8,7 @@
 
     执行流程：
 
-    ```
+```
     git clone https://github.com/gaganotlow/plate_recognize.git
 
     cd plate_recognize
@@ -17,7 +17,7 @@
 
     ./yolov8_pose_img ../weights/best_relu.rknn ../weights/PlateRec_CTC.rknn ../media/test.jpg
 
-    ```
+```
 <img width="832" height="454" alt="image" src="https://github.com/user-attachments/assets/2320d620-03ed-4c2c-9304-57d553233a54" />
 
 
